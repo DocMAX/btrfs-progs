@@ -46,6 +46,8 @@ static char *progress2string(char *buf, size_t s, int progress_1000);
 
 /* Used to separate internal errors from actual dev replace ioctl results. */
 #define BTRFS_IOCTL_DEV_REPLACE_RESULT_NO_RESULT		-1
+/* Buffer size for ETA string display */
+#define ETA_STR_SIZE						80
 
 static const char *replace_dev_result2string(__u64 result)
 {
@@ -371,6 +373,7 @@ static DEFINE_SIMPLE_COMMAND(replace_start, "start");
 static const char *const cmd_replace_status_usage[] = {
 	"btrfs replace status [-1] <mount_point>",
 	"Print status and progress information of a running device replace operation",
+	"Shows current progress percentage and estimated time of arrival (ETA) for completion.",
 	"",
 	OPTLINE("-1", "print once instead of print continuously until the replace operation finishes (or is canceled)"),
 	NULL
@@ -421,6 +424,8 @@ static int print_replace_status(int fd, const char *path, int once)
 	char string1[80];
 	char string2[80];
 	char string3[80];
+	char eta_str[ETA_STR_SIZE];
+	struct tm eta_tm_buf;
 
 	for (;;) {
 		args.cmd = BTRFS_IOCTL_DEV_REPLACE_CMD_STATUS;
@@ -454,6 +459,27 @@ static int print_replace_status(int fd, const char *path, int once)
 				       progress2string(string3,
 						       sizeof(string3),
 						       status->progress_1000));
+			/* Calculate and display ETA if progress is available */
+			if (status->progress_1000 > 0 && status->time_started > 0) {
+				time_t current_time = time(NULL);
+				time_t elapsed_time = current_time - status->time_started;
+				time_t total_time, remaining_time, eta_time;
+
+				/* Avoid division by zero */
+				if (elapsed_time > 0) {
+					total_time = (elapsed_time * 1000) / status->progress_1000;
+					remaining_time = total_time - elapsed_time;
+
+					/* Only show ETA if we have a reasonable estimate */
+					if (remaining_time > 0 && total_time > elapsed_time) {
+						eta_time = current_time + remaining_time;
+						struct tm *eta_tm = localtime_r(&eta_time, &eta_tm_buf);
+						if (strftime(eta_str, sizeof(eta_str), "ETA: %a %b %d %H:%M:%S %Y", eta_tm) > 0) {
+							num_chars += printf(", %s", eta_str);
+						}
+					}
+				}
+			}
 			break;
 		case BTRFS_IOCTL_DEV_REPLACE_STATE_FINISHED:
 			prevent_loop = 1;
